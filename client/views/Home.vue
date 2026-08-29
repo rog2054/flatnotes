@@ -19,7 +19,9 @@
           :to="{ name: 'note', params: { title: note.title } }"
           class="mb-1"
         >
-          <CustomButton :label="note.title" />
+          <CustomButton
+            :label="`${note.title}${note.encrypted ? ' 🔒' : ''}`"
+          />
         </RouterLink>
         <RouterLink
           v-if="notes.length > globalStore.config.quickAccessLimit"
@@ -65,9 +67,7 @@ function init() {
     globalStore.config.quickAccessTerm,
     globalStore.config.quickAccessSort,
     // Order by ascending if sorting by title, descending otherwise.
-    globalStore.config.quickAccessSort === "title"
-      ? "asc"
-      : "desc",
+    globalStore.config.quickAccessSort === "title" ? "asc" : "desc",
     // Limit is increased by 1 to check if there are more notes than the limit.
     globalStore.config.quickAccessLimit + 1,
   )

@@ -24,6 +24,7 @@ class Note(CustomBaseModel):
     title: str
     content: Optional[str] = Field(None)
     last_modified: float
+    encrypted: bool = Field(False)
 
 
 class NoteUpdate(CustomBaseModel):
@@ -33,11 +34,19 @@ class NoteUpdate(CustomBaseModel):
         AfterValidator(is_valid_filename),
     ] = Field(None)
     new_content: Optional[str] = Field(None)
+    passphrase: Optional[str] = Field(None, min_length=1)
+    expected_last_modified: Optional[float] = Field(None)
+
+
+class NoteSecret(CustomBaseModel):
+    passphrase: str = Field(min_length=1)
+    expected_last_modified: Optional[float] = Field(None)
 
 
 class SearchResult(CustomBaseModel):
     title: str
     last_modified: float
+    encrypted: bool = Field(False)
 
     score: Optional[float] = Field(None)
     title_highlights: Optional[str] = Field(None)

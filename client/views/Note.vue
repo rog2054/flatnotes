@@ -9,6 +9,35 @@
     @confirm="deleteConfirmedHandler"
   />
 
+  <ConfirmModal
+    v-model="isDecryptModalVisible"
+    title="Permanently Decrypt Note"
+    message="This will replace the encrypted file with plaintext Markdown. The filename and attachments are already unencrypted. Continue?"
+    confirmButtonText="Decrypt Permanently"
+    confirmButtonStyle="danger"
+    @confirm="decryptConfirmedHandler"
+  />
+
+  <PassphraseModal
+    v-model="isPassphraseModalVisible"
+    :title="
+      passphraseModalMode === 'encrypt'
+        ? 'Encrypt Note'
+        : 'Unlock Encrypted Note'
+    "
+    :message="
+      passphraseModalMode === 'encrypt'
+        ? 'The passphrase cannot be recovered. Attachments and the note filename will remain plaintext.'
+        : 'The passphrase stays in browser memory until you lock encrypted notes or close this tab.'
+    "
+    :confirmButtonText="
+      passphraseModalMode === 'encrypt' ? 'Encrypt' : 'Unlock'
+    "
+    :confirmPassphrase="passphraseModalMode === 'encrypt'"
+    :initialPassphrase="globalStore.encryptionPassphrase || ''"
+    @submit="passphraseSubmittedHandler"
+  />
+
   <!-- Save Changes Modal -->
   <ConfirmModal
     v-model="isSaveChangesModalVisible"
@@ -54,6 +83,24 @@
 
       <!-- Buttons -->
       <div class="flex shrink-0 self-end md:self-baseline print:hidden">
+        <CustomButton
+          v-show="canModify && !isNewNote && !note.encrypted"
+          label="Encrypt"
+          :iconPath="mdiLockOutline"
+          @click="encryptHandler"
+        />
+        <CustomButton
+          v-show="note.encrypted && isUnlocked"
+          label="Lock"
+          :iconPath="mdiLock"
+          @click="lockHandler"
+        />
+        <CustomButton
+          v-show="canModify && note.encrypted && isUnlocked"
+          label="Decrypt"
+          :iconPath="mdiLockOpenOutline"
+          @click="isDecryptModalVisible = true"
+        />
         <!-- Delete Button -->
         <CustomButton
           v-show="canModify && !isNewNote"
@@ -77,7 +124,7 @@
         </CustomButton>
         <!-- Edit Toggle -->
         <Toggle
-          v-if="canModify"
+          v-if="canModify && (!note.encrypted || isUnlocked)"
           label="Edit"
           :isOn="editMode"
           class="ml-1"
@@ -90,8 +137,24 @@
 
     <!-- Content -->
     <div class="flex-1">
+      <div
+        v-if="note.encrypted && !isUnlocked"
+        class="flex h-full min-h-64 flex-col items-center justify-center text-center"
+      >
+        <div class="mb-3 text-5xl">🔒</div>
+        <div class="mb-2 text-xl">This note is encrypted</div>
+        <div class="mb-5 max-w-md text-sm text-theme-text-muted">
+          Its contents and tags are excluded from search. The title and
+          attachments remain plaintext.
+        </div>
+        <CustomButton
+          label="Unlock Note"
+          :iconPath="mdiLockOpenOutline"
+          @click="unlockHandler"
+        />
+      </div>
       <ToastViewer
-        v-if="!editMode"
+        v-if="!editMode && (!note.encrypted || isUnlocked)"
         :initialValue="note.content"
         class="toast-viewer pb-4"
       />
@@ -119,7 +182,12 @@
 </style>
 
 <script setup>
-import { mdiNoteOffOutline } from "@mdi/js";
+import {
+  mdiLock,
+  mdiLockOpenOutline,
+  mdiLockOutline,
+  mdiNoteOffOutline,
+} from "@mdi/js";
 import { mdilContentSave, mdilDelete } from "@mdi/light-js";
 import Mousetrap from "mousetrap";
 import { useToast } from "primevue/usetoast";
@@ -130,14 +198,18 @@ import {
   apiErrorHandler,
   createAttachment,
   createNote,
+  decryptNote,
   deleteNote,
+  encryptNote,
   getNote,
+  unlockNote,
   updateNote,
 } from "../api.js";
 import { Note } from "../classes.js";
 import ConfirmModal from "../components/ConfirmModal.vue";
 import CustomButton from "../components/CustomButton.vue";
 import LoadingIndicator from "../components/LoadingIndicator.vue";
+import PassphraseModal from "../components/PassphraseModal.vue";
 import Toggle from "../components/Toggle.vue";
 import ToastEditor from "../components/toastui/ToastEditor.vue";
 import ToastViewer from "../components/toastui/ToastViewer.vue";
@@ -158,10 +230,16 @@ const editMode = ref(false);
 const globalStore = useGlobalStore();
 const isSaveChangesModalVisible = ref(false);
 const isDeleteModalVisible = ref(false);
+const isDecryptModalVisible = ref(false);
 const isDraftModalVisible = ref(false);
+const isPassphraseModalVisible = ref(false);
+const isUnlocked = computed(
+  () => !note.value.encrypted || note.value.content != null,
+);
 const isNewNote = computed(() => !props.title);
 const loadingIndicator = ref();
 const note = ref({});
+const passphraseModalMode = ref("unlock");
 const reservedFilenameCharacters = /[<>:"/\\|?*]/;
 const router = useRouter();
 const newTitle = ref();
@@ -180,7 +258,11 @@ function init() {
     getNote(props.title)
       .then((data) => {
         note.value = data;
-        loadingIndicator.value.setLoaded();
+        if (data.encrypted && globalStore.encryptionPassphrase) {
+          unlockWithPassphrase(globalStore.encryptionPassphrase, false);
+        } else {
+          loadingIndicator.value.setLoaded();
+        }
       })
       .catch((error) => {
         if (error.response?.status === 404) {
@@ -214,6 +296,10 @@ function toggleEditModeHandler() {
 }
 
 function editHandler() {
+  if (note.value.encrypted && !isUnlocked.value) {
+    unlockHandler();
+    return;
+  }
   const draftContent = loadDraft();
   if (draftContent) {
     isDraftModalVisible.value = true;
@@ -303,7 +389,13 @@ function saveExisting(newTitle, newContent, close = false) {
     return;
   }
 
-  updateNote(note.value.title, newTitle, newContent)
+  updateNote(
+    note.value.title,
+    newTitle,
+    newContent,
+    note.value.encrypted ? globalStore.encryptionPassphrase : null,
+    note.value.lastModified,
+  )
     .then((data) => {
       clearDraft();
       note.value = data;
@@ -314,7 +406,18 @@ function saveExisting(newTitle, newContent, close = false) {
 }
 
 function noteSaveFailure(error) {
-  if (error.response?.status === 409) {
+  if (
+    error.response?.status === 409 &&
+    error.response?.data?.detail?.includes("changed since")
+  ) {
+    toast.add(
+      getToastOptions(
+        "This note changed after you loaded it. Reload before saving to avoid losing changes.",
+        "Save Conflict",
+        "error",
+      ),
+    );
+  } else if (error.response?.status === 409) {
     toast.add(
       getToastOptions(
         "A note with this title already exists. Please try again with a new title.",
@@ -441,6 +544,7 @@ function contentChangedHandler() {
 
 // Drafts
 function saveDraft() {
+  if (note.value.encrypted) return;
   const content = toastEditor.value.getMarkdown();
   const userHasPersistedToken = isCurrentTokenStored();
   if (content) {
@@ -458,6 +562,7 @@ function clearDraft() {
 }
 
 function loadDraft() {
+  if (note.value.encrypted) return null;
   const localDraft = localStorage.getItem(note.value.title);
   const sessionDraft = sessionStorage.getItem(note.value.title);
   return localDraft || sessionDraft;
@@ -531,6 +636,136 @@ function isContentChanged() {
     newTitle.value != note.value.title ||
     toastEditor.value.getMarkdown() != note.value.content
   );
+}
+
+// Encryption
+function unlockHandler() {
+  passphraseModalMode.value = "unlock";
+  isPassphraseModalVisible.value = true;
+}
+
+function encryptHandler() {
+  if (editMode.value && isContentChanged()) {
+    toast.add(
+      getToastOptions(
+        "Save or discard your changes before encrypting this note.",
+        "Unsaved Changes",
+        "error",
+      ),
+    );
+    return;
+  }
+  passphraseModalMode.value = "encrypt";
+  isPassphraseModalVisible.value = true;
+}
+
+function passphraseSubmittedHandler(passphrase) {
+  if (passphraseModalMode.value === "encrypt") {
+    encryptWithPassphrase(passphrase);
+  } else {
+    unlockWithPassphrase(passphrase);
+  }
+}
+
+function unlockWithPassphrase(passphrase, showFailure = true) {
+  loadingIndicator.value.setLoading();
+  unlockNote(note.value.title, passphrase, note.value.lastModified)
+    .then((data) => {
+      note.value = data;
+      globalStore.encryptionPassphrase = passphrase;
+      loadingIndicator.value.setLoaded();
+    })
+    .catch((error) => {
+      loadingIndicator.value.setLoaded();
+      if (error.response?.status === 403) {
+        if (showFailure) {
+          toast.add(
+            getToastOptions(
+              "The passphrase could not unlock this note.",
+              "Incorrect Passphrase",
+              "error",
+            ),
+          );
+        }
+      } else if (error.response?.status === 409) {
+        init();
+      } else {
+        apiErrorHandler(error, toast);
+      }
+    });
+}
+
+function encryptWithPassphrase(passphrase) {
+  loadingIndicator.value.setLoading();
+  encryptNote(note.value.title, passphrase, note.value.lastModified)
+    .then((data) => {
+      note.value = data;
+      globalStore.encryptionPassphrase = passphrase;
+      editMode.value = false;
+      clearDraft();
+      loadingIndicator.value.setLoaded();
+      toast.add(getToastOptions("Note encrypted ✓", "Success", "success"));
+    })
+    .catch(encryptionFailureHandler);
+}
+
+function lockHandler() {
+  if (editMode.value && isContentChanged()) {
+    toast.add(
+      getToastOptions(
+        "Save or discard your changes before locking encrypted notes.",
+        "Unsaved Changes",
+        "error",
+      ),
+    );
+    return;
+  }
+  editMode.value = false;
+  note.value.content = null;
+  globalStore.lockEncryptedNotes();
+  clearDraft();
+}
+
+function decryptConfirmedHandler() {
+  loadingIndicator.value.setLoading();
+  decryptNote(
+    note.value.title,
+    globalStore.encryptionPassphrase,
+    note.value.lastModified,
+  )
+    .then((data) => {
+      note.value = data;
+      editMode.value = false;
+      loadingIndicator.value.setLoaded();
+      toast.add(
+        getToastOptions("Note permanently decrypted ✓", "Success", "success"),
+      );
+    })
+    .catch(encryptionFailureHandler);
+}
+
+function encryptionFailureHandler(error) {
+  loadingIndicator.value.setLoaded();
+  if (error.response?.status === 403) {
+    toast.add(
+      getToastOptions(
+        "The passphrase could not unlock this note.",
+        "Incorrect Passphrase",
+        "error",
+      ),
+    );
+  } else if (error.response?.status === 409) {
+    toast.add(
+      getToastOptions(
+        error.response?.data?.detail ||
+          "The note changed. Reload and try again.",
+        "Note Conflict",
+        "error",
+      ),
+    );
+  } else {
+    apiErrorHandler(error, toast);
+  }
 }
 
 watch(() => props.title, init);

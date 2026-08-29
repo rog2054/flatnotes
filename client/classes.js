@@ -5,6 +5,7 @@ class Note {
     this.title = note?.title;
     this.lastModified = note?.lastModified;
     this.content = note?.content;
+    this.encrypted = note?.encrypted ?? false;
   }
 
   get lastModifiedAsDate() {
