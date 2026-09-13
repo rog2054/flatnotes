@@ -7,27 +7,32 @@
 
 A self-hosted, database-less note-taking web app that utilises a flat folder of markdown files for storage.
 
-Log into the [demo site](https://demo.flatnotes.io) and take a look around. *Note: This site resets every 15 minutes.*
+This fork adds optional, passphrase-protected note encryption using the
+standard [age](https://age-encryption.org/) file format. Ordinary notes remain
+normal Markdown files, while encrypted notes remain independently recoverable
+with age-compatible tools.
+
+Log into the [demo site](https://demo.flatnotes.io) and take a look around. _Note: This site resets every 15 minutes._
 
 ## Contents
 
-* [Design Principle](#design-principle)
-* [Features](#features)
-* [Getting Started](#getting-started)
-  * [Hosted](#hosted)
-  * [Self Hosted](#self-hosted)
-* [Roadmap](#roadmap)
-* [Contributing](#contributing)
-* [Sponsorship](#sponsorship)
-* [Thanks](#thanks)
+- [Design Principle](#design-principle)
+- [Features](#features)
+- [Getting Started](#getting-started)
+  - [Hosted](#hosted)
+  - [Self Hosted](#self-hosted)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Sponsorship](#sponsorship)
+- [Thanks](#thanks)
 
 ## Design Principle
 
 flatnotes is designed to be a distraction-free note-taking app that puts your note content first. This means:
 
-* A clean and simple user interface.
-* No folders, notebooks or anything like that. Just all of your notes, backed by powerful search and tagging functionality.
-* Quick access to a full-text search from anywhere in the app (keyboard shortcut "/").
+- A clean and simple user interface.
+- No folders, notebooks or anything like that. Just all of your notes, backed by powerful search and tagging functionality.
+- Quick access to a full-text search from anywhere in the app (keyboard shortcut "/").
 
 Another key design principle is not to take your notes hostage. Your notes are just markdown files. There's no database, proprietary formatting, complicated folder structures or anything like that. You're free at any point to just move the files elsewhere and use another app.
 
@@ -35,15 +40,63 @@ Equally, the only thing flatnotes caches is the search index and that's incremen
 
 ## Features
 
-* Mobile responsive web interface.
-* Raw/WYSIWYG markdown editor modes.
-* Advanced search functionality.
-* Note "tagging" functionality.
-* Customisable home page.
-* Wikilink support to easily link to other notes (`[[My Other Note]]`).
-* Light/dark themes.
-* Multiple authentication options (none, read-only, username/password, 2FA).
-* Restful API.
+- Mobile responsive web interface.
+- Raw/WYSIWYG markdown editor modes.
+- Advanced search functionality.
+- Note "tagging" functionality.
+- Customisable home page.
+- Wikilink support to easily link to other notes (`[[My Other Note]]`).
+- Light/dark themes.
+- Multiple authentication options (none, read-only, username/password, 2FA).
+- Restful API.
+- Optional age-encrypted note contents with in-browser session unlocking.
+
+## Encrypted Notes
+
+Open an existing note and select **Encrypt** to replace its Markdown contents
+with an ASCII-armoured, passphrase-encrypted age payload. The passphrase is
+kept only in the current browser tab's memory and is sent over the authenticated
+connection when an encrypted note is unlocked or saved. It is never written to
+Flatnotes configuration, browser storage, cookies, or the note directory.
+
+Encrypted notes can be locked again, edited and re-encrypted, or permanently
+decrypted from the note screen. Writes use an atomic file replacement and are
+rejected if the note changed after it was loaded.
+
+### Security Boundary
+
+Encryption protects note contents in the data directory and its backups. It is
+server-side encryption: the running Flatnotes server receives the passphrase
+and sees plaintext while servicing an unlocked note, so use HTTPS and operate
+the server as a trusted system.
+
+The following remain plaintext and may reveal sensitive metadata:
+
+- Note titles and filenames.
+- Note count, sizes, and modification times.
+- Files in the `attachments` directory, including attachments linked from an
+  encrypted note.
+- The title and modification time stored in the Whoosh search index.
+
+Encrypted note contents and tags are not added to the search index. Encrypted
+notes can still be found by their plaintext title and appear in recent/all-note
+lists with a lock indicator. Browser drafts are deliberately disabled for
+encrypted notes so plaintext is not persisted in web storage.
+
+There is no password reset or recovery mechanism. Losing a passphrase means
+losing access to the corresponding note.
+
+### Recovery Outside Flatnotes
+
+Encrypted notes remain `.md` files containing standard ASCII-armoured age
+data. To recover one independently, install the official age command and run:
+
+```shell
+age --decrypt "My Encrypted Note.md" > "My Encrypted Note.decrypted.md"
+```
+
+Enter the note's passphrase when prompted. Keep backups of encrypted files
+before performing bulk or external operations.
 
 See [the wiki](https://github.com/dullage/flatnotes/wiki) for more details.
 
@@ -54,7 +107,6 @@ See [the wiki](https://github.com/dullage/flatnotes/wiki) for more details.
 A quick and easy way to get started with flatnotes is to host it on PikaPods. Just click the button below and follow the instructions.
 
 [![PikaPods](https://www.pikapods.com/static/run-button-34.svg)](https://www.pikapods.com/pods?run=flatnotes)
-
 
 ### Self Hosted
 
@@ -76,6 +128,7 @@ docker run -d \
 ```
 
 ### Example Docker Compose
+
 ```yaml
 version: "3"
 
@@ -92,7 +145,7 @@ services:
       FLATNOTES_SECRET_KEY: "aLongRandomSeriesOfCharacters"
     volumes:
       - "./data:/data"
-      # Optional. Allows you to save the search index in a different location: 
+      # Optional. Allows you to save the search index in a different location:
       # - "./index:/data/.flatnotes"
     ports:
       - "8080:8080"
@@ -119,5 +172,5 @@ If you find this project useful, please consider buying me a beer. It would genu
 
 A special thanks to 2 fantastic open-source projects that make flatnotes possible.
 
-* [Whoosh](https://whoosh.readthedocs.io/en/latest/intro.html) - A fast, pure Python search engine library.
-* [TOAST UI Editor](https://ui.toast.com/tui-editor) - A GFM Markdown and WYSIWYG editor for the browser.
+- [Whoosh](https://whoosh.readthedocs.io/en/latest/intro.html) - A fast, pure Python search engine library.
+- [TOAST UI Editor](https://ui.toast.com/tui-editor) - A GFM Markdown and WYSIWYG editor for the browser.

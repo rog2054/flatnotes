@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Literal
 
-from .models import Note, NoteCreate, NoteUpdate, SearchResult
+from .models import Note, NoteCreate, NoteSecret, NoteUpdate, SearchResult
 
 
 class BaseNotes(ABC):
@@ -13,6 +13,21 @@ class BaseNotes(ABC):
     @abstractmethod
     def get(self, title: str) -> Note:
         """Get a specific note."""
+        pass
+
+    @abstractmethod
+    def unlock(self, title: str, data: NoteSecret) -> Note:
+        """Decrypt a note in memory and return its plaintext."""
+        pass
+
+    @abstractmethod
+    def encrypt(self, title: str, data: NoteSecret) -> Note:
+        """Encrypt a plaintext note in place."""
+        pass
+
+    @abstractmethod
+    def decrypt(self, title: str, data: NoteSecret) -> Note:
+        """Permanently decrypt an encrypted note in place."""
         pass
 
     @abstractmethod

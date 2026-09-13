@@ -111,12 +111,56 @@ export async function getNote(title) {
   }
 }
 
-export async function updateNote(title, newTitle, newContent) {
+export async function updateNote(
+  title,
+  newTitle,
+  newContent,
+  passphrase,
+  expectedLastModified,
+) {
   try {
     const response = await api.patch(`api/notes/${encodeURIComponent(title)}`, {
       newTitle: newTitle,
       newContent: newContent,
+      passphrase: passphrase,
+      expectedLastModified: expectedLastModified,
     });
+    return new Note(response.data);
+  } catch (response) {
+    return Promise.reject(response);
+  }
+}
+
+export async function unlockNote(title, passphrase, expectedLastModified) {
+  try {
+    const response = await api.post(
+      `api/notes/${encodeURIComponent(title)}/unlock`,
+      { passphrase, expectedLastModified },
+    );
+    return new Note(response.data);
+  } catch (response) {
+    return Promise.reject(response);
+  }
+}
+
+export async function encryptNote(title, passphrase, expectedLastModified) {
+  try {
+    const response = await api.post(
+      `api/notes/${encodeURIComponent(title)}/encrypt`,
+      { passphrase, expectedLastModified },
+    );
+    return new Note(response.data);
+  } catch (response) {
+    return Promise.reject(response);
+  }
+}
+
+export async function decryptNote(title, passphrase, expectedLastModified) {
+  try {
+    const response = await api.post(
+      `api/notes/${encodeURIComponent(title)}/decrypt`,
+      { passphrase, expectedLastModified },
+    );
     return new Note(response.data);
   } catch (response) {
     return Promise.reject(response);

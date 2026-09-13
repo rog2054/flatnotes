@@ -37,7 +37,7 @@
         />
         <label for="remember-me">Remember Me</label>
       </div>
-      <CustomButton :iconPath="mdilLogin" label="Log In" />
+      <CustomButton type="submit" :iconPath="mdilLogin" label="Log In" />
     </form>
   </div>
 </template>

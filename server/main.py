@@ -12,7 +12,13 @@ from auth.models import Login, Token
 from global_config import AuthType, GlobalConfig, GlobalConfigResponseModel
 from helpers import replace_base_href
 from notes.base import BaseNotes
-from notes.models import Note, NoteCreate, NoteUpdate, SearchResult
+from notes.errors import (
+    IncorrectPassphraseError,
+    InvalidEncryptedNoteError,
+    NoteConflictError,
+    NoteEncryptionStateError,
+)
+from notes.models import Note, NoteCreate, NoteSecret, NoteUpdate, SearchResult
 
 global_config = GlobalConfig()
 auth: BaseAuth = global_config.load_auth()
@@ -84,6 +90,38 @@ def get_note(title: str):
         raise HTTPException(404, api_messages.note_not_found)
 
 
+def _raise_encryption_http_error(error: Exception):
+    if isinstance(error, IncorrectPassphraseError):
+        raise HTTPException(403, api_messages.incorrect_note_passphrase)
+    if isinstance(error, InvalidEncryptedNoteError):
+        raise HTTPException(422, api_messages.invalid_encrypted_note)
+    if isinstance(error, NoteConflictError):
+        raise HTTPException(409, api_messages.note_changed)
+    if isinstance(error, NoteEncryptionStateError):
+        raise HTTPException(409, api_messages.invalid_encryption_state)
+    raise error
+
+
+@router.post(
+    "/api/notes/{title}/unlock",
+    dependencies=auth_deps,
+    response_model=Note,
+)
+def unlock_note(title: str, data: NoteSecret):
+    """Decrypt an encrypted note in memory without changing it on disk."""
+    try:
+        return note_storage.unlock(title, data)
+    except FileNotFoundError:
+        raise HTTPException(404, api_messages.note_not_found)
+    except (
+        IncorrectPassphraseError,
+        InvalidEncryptedNoteError,
+        NoteConflictError,
+        NoteEncryptionStateError,
+    ) as error:
+        _raise_encryption_http_error(error)
+
+
 if global_config.auth_type != AuthType.READ_ONLY:
 
     # Create Note
@@ -126,6 +164,49 @@ if global_config.auth_type != AuthType.READ_ONLY:
             )
         except FileNotFoundError:
             raise HTTPException(404, api_messages.note_not_found)
+        except (
+            IncorrectPassphraseError,
+            InvalidEncryptedNoteError,
+            NoteConflictError,
+            NoteEncryptionStateError,
+        ) as error:
+            _raise_encryption_http_error(error)
+
+    @router.post(
+        "/api/notes/{title}/encrypt",
+        dependencies=auth_deps,
+        response_model=Note,
+    )
+    def encrypt_note(title: str, data: NoteSecret):
+        try:
+            return note_storage.encrypt(title, data)
+        except FileNotFoundError:
+            raise HTTPException(404, api_messages.note_not_found)
+        except (
+            IncorrectPassphraseError,
+            InvalidEncryptedNoteError,
+            NoteConflictError,
+            NoteEncryptionStateError,
+        ) as error:
+            _raise_encryption_http_error(error)
+
+    @router.post(
+        "/api/notes/{title}/decrypt",
+        dependencies=auth_deps,
+        response_model=Note,
+    )
+    def decrypt_note(title: str, data: NoteSecret):
+        try:
+            return note_storage.decrypt(title, data)
+        except FileNotFoundError:
+            raise HTTPException(404, api_messages.note_not_found)
+        except (
+            IncorrectPassphraseError,
+            InvalidEncryptedNoteError,
+            NoteConflictError,
+            NoteEncryptionStateError,
+        ) as error:
+            _raise_encryption_http_error(error)
 
     # Delete Note
     @router.delete(

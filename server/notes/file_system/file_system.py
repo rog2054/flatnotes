@@ -2,11 +2,14 @@ import glob
 import os
 import re
 import shutil
+import tempfile
 import time
 from datetime import datetime
 from typing import List, Literal, Set, Tuple
 
 import whoosh
+import pyrage
+from pyrage import passphrase as age_passphrase
 from whoosh import writing
 from whoosh.analysis import CharsetFilter, StemmingAnalyzer
 from whoosh.fields import DATETIME, ID, KEYWORD, TEXT, SchemaClass
@@ -22,10 +25,17 @@ from helpers import get_env, is_valid_filename
 from logger import logger
 
 from ..base import BaseNotes
-from ..models import Note, NoteCreate, NoteUpdate, SearchResult
+from ..errors import (
+    IncorrectPassphraseError,
+    InvalidEncryptedNoteError,
+    NoteConflictError,
+    NoteEncryptionStateError,
+)
+from ..models import Note, NoteCreate, NoteSecret, NoteUpdate, SearchResult
 
 MARKDOWN_EXT = ".md"
 INDEX_SCHEMA_VERSION = "5"
+AGE_ARMOR_HEADER = "-----BEGIN AGE ENCRYPTED FILE-----"
 
 StemmingFoldingAnalyzer = StemmingAnalyzer() | CharsetFilter(accent_map)
 
@@ -70,17 +80,83 @@ class FileSystemNotes(BaseNotes):
         """Get a specific note."""
         is_valid_filename(title)
         filepath = self._path_from_title(title)
+        stored_content = self._read_file(filepath)
+        encrypted = self._is_encrypted(stored_content)
+        return Note(
+            title=title,
+            content=None if encrypted else stored_content,
+            last_modified=os.path.getmtime(filepath),
+            encrypted=encrypted,
+        )
+
+    def unlock(self, title: str, data: NoteSecret) -> Note:
+        """Decrypt a note in memory without changing the file on disk."""
+        is_valid_filename(title)
+        filepath = self._path_from_title(title)
+        self._check_last_modified(filepath, data.expected_last_modified)
+        stored_content = self._read_file(filepath)
+        if not self._is_encrypted(stored_content):
+            raise NoteEncryptionStateError("The note is not encrypted.")
+        return Note(
+            title=title,
+            content=self._decrypt_content(stored_content, data.passphrase),
+            last_modified=os.path.getmtime(filepath),
+            encrypted=True,
+        )
+
+    def encrypt(self, title: str, data: NoteSecret) -> Note:
+        """Encrypt a plaintext note in place using age ASCII armour."""
+        is_valid_filename(title)
+        filepath = self._path_from_title(title)
+        self._check_last_modified(filepath, data.expected_last_modified)
         content = self._read_file(filepath)
+        if self._is_encrypted(content):
+            raise NoteEncryptionStateError("The note is already encrypted.")
+        encrypted_content = self._encrypt_content(content, data.passphrase)
+        self._atomic_write_file(filepath, encrypted_content)
         return Note(
             title=title,
             content=content,
             last_modified=os.path.getmtime(filepath),
+            encrypted=True,
+        )
+
+    def decrypt(self, title: str, data: NoteSecret) -> Note:
+        """Permanently replace an encrypted note with its plaintext."""
+        is_valid_filename(title)
+        filepath = self._path_from_title(title)
+        self._check_last_modified(filepath, data.expected_last_modified)
+        stored_content = self._read_file(filepath)
+        if not self._is_encrypted(stored_content):
+            raise NoteEncryptionStateError("The note is not encrypted.")
+        content = self._decrypt_content(stored_content, data.passphrase)
+        self._atomic_write_file(filepath, content)
+        return Note(
+            title=title,
+            content=content,
+            last_modified=os.path.getmtime(filepath),
+            encrypted=False,
         )
 
     def update(self, title: str, data: NoteUpdate) -> Note:
         """Update a specific note."""
         is_valid_filename(title)
         filepath = self._path_from_title(title)
+        self._check_last_modified(filepath, data.expected_last_modified)
+        stored_content = self._read_file(filepath)
+        encrypted = self._is_encrypted(stored_content)
+        if encrypted and data.new_content is not None:
+            if data.passphrase is None:
+                raise IncorrectPassphraseError
+            # Verify the passphrase before changing either the title or file.
+            self._decrypt_content(stored_content, data.passphrase)
+            output_content = self._encrypt_content(
+                data.new_content, data.passphrase
+            )
+        elif data.new_content is not None:
+            output_content = data.new_content
+        else:
+            output_content = stored_content
         if data.new_title is not None:
             new_filepath = self._path_from_title(data.new_title)
             if filepath != new_filepath and os.path.isfile(new_filepath):
@@ -91,14 +167,15 @@ class FileSystemNotes(BaseNotes):
             title = data.new_title
             filepath = new_filepath
         if data.new_content is not None:
-            self._write_file(filepath, data.new_content, overwrite=True)
+            self._atomic_write_file(filepath, output_content)
             content = data.new_content
         else:
-            content = self._read_file(filepath)
+            content = None if encrypted else stored_content
         return Note(
             title=title,
             content=content,
             last_modified=os.path.getmtime(filepath),
+            encrypted=encrypted,
         )
 
     def delete(self, title: str) -> None:
@@ -212,7 +289,7 @@ class FileSystemNotes(BaseNotes):
         """Add a Note object to the index using the given writer. If the
         filename already exists in the index an update will be performed
         instead."""
-        content_ex_tags, tag_set = self._extract_tags(note.content)
+        content_ex_tags, tag_set = self._extract_tags(note.content or "")
         tag_string = " ".join(tag_set)
         writer.update_document(
             filename=note.title + MARKDOWN_EXT,
@@ -358,6 +435,9 @@ class FileSystemNotes(BaseNotes):
         return SearchResult(
             title=title,
             last_modified=last_modified,
+            encrypted=self._is_encrypted(
+                self._read_file(self._path_from_title(title))
+            ),
             score=score,
             title_highlights=title_highlights,
             content_highlights=content_highlights,
@@ -386,6 +466,71 @@ class FileSystemNotes(BaseNotes):
         with open(filepath, "r") as f:
             content = f.read()
         return content
+
+    @staticmethod
+    def _is_encrypted(content: str) -> bool:
+        return content.startswith(AGE_ARMOR_HEADER)
+
+    @staticmethod
+    def _encrypt_content(content: str, passphrase: str) -> str:
+        try:
+            encrypted = age_passphrase.encrypt(
+                content.encode("utf-8"), passphrase, armored=True
+            )
+            return encrypted.decode("ascii")
+        except (pyrage.EncryptError, UnicodeError) as error:
+            raise InvalidEncryptedNoteError from error
+
+    @staticmethod
+    def _decrypt_content(content: str, passphrase: str) -> str:
+        try:
+            decrypted = age_passphrase.decrypt(
+                content.encode("ascii"), passphrase
+            )
+            return decrypted.decode("utf-8")
+        except pyrage.DecryptError as error:
+            error_message = str(error).lower()
+            if (
+                "incorrect passphrase" in error_message
+                or "no matching" in error_message
+                or error_message == "decryption failed"
+            ):
+                raise IncorrectPassphraseError from error
+            raise InvalidEncryptedNoteError from error
+        except UnicodeError as error:
+            raise InvalidEncryptedNoteError from error
+
+    @staticmethod
+    def _check_last_modified(filepath: str, expected: float = None):
+        actual = os.path.getmtime(filepath)
+        if expected is not None and actual != expected:
+            raise NoteConflictError
+
+    @staticmethod
+    def _atomic_write_file(filepath: str, content: str):
+        """Write a complete sibling file and atomically replace the target."""
+        directory = os.path.dirname(filepath)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=directory,
+                prefix=".flatnotes-write-",
+                delete=False,
+            ) as temp_file:
+                temp_path = temp_file.name
+                temp_file.write(content)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+            os.replace(temp_path, filepath)
+            temp_path = None
+        finally:
+            if temp_path is not None:
+                try:
+                    os.remove(temp_path)
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _write_file(filepath: str, content: str, overwrite: bool = False):

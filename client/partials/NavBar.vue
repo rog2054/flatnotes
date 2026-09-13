@@ -91,6 +91,7 @@ const showNewButton = computed(() => {
 });
 
 function logOut() {
+  globalStore.lockEncryptedNotes();
   clearStoredToken();
   localStorage.clear();
   router.push({ name: "login" });
@@ -101,6 +102,8 @@ function toggleMenu(event) {
 }
 
 function showLogOutButton() {
-  return ![authTypes.none, authTypes.readOnly].includes(globalStore.config.authType);
+  return ![authTypes.none, authTypes.readOnly].includes(
+    globalStore.config.authType,
+  );
 }
 </script>

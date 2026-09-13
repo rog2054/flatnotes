@@ -1,5 +1,6 @@
 <template>
   <button
+    :type="type"
     class="text-nowrap rounded px-2 py-1"
     :class="{
       'bg-theme-background text-theme-text-muted hover:bg-theme-background-elevated':
@@ -24,6 +25,7 @@ defineProps({
   iconPath: String,
   iconSize: String,
   label: String,
+  type: { type: String, default: "button" },
   style: {
     type: String,
     default: "subtle",

@@ -1,7 +1,7 @@
 ARG BUILD_DIR=/build
 
 # Build Container
-FROM --platform=$BUILDPLATFORM node:24-alpine AS build
+FROM node:24-alpine AS build
 
 ARG BUILD_DIR
 
@@ -53,7 +53,8 @@ ENV UV_PROJECT_ENVIRONMENT=/usr/local
 RUN uv sync --locked --compile-bytecode --no-dev
 
 COPY server ./server
-COPY --from=build --chmod=777 ${BUILD_DIR}/client/dist ./client/dist
+COPY --from=build ${BUILD_DIR}/client/dist ./client/dist
+RUN chmod -R 777 ./client/dist
 
 COPY entrypoint.sh healthcheck.sh /
 RUN chmod +x /entrypoint.sh /healthcheck.sh
