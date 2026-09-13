@@ -7,12 +7,13 @@
 
 A self-hosted, database-less note-taking web app that utilises a flat folder of markdown files for storage.
 
+---
+**FORK**
 This fork adds optional, passphrase-protected note encryption using the
 standard [age](https://age-encryption.org/) file format. Ordinary notes remain
 normal Markdown files, while encrypted notes remain independently recoverable
 with age-compatible tools.
-
-Log into the [demo site](https://demo.flatnotes.io) and take a look around. _Note: This site resets every 15 minutes._
+ ---
 
 ## Contents
 
